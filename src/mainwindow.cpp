@@ -1,6 +1,6 @@
 #define VERSION_MAJOR 0
-#define VERSION_MINOR 1
-#define VERSION_REVISION 1
+#define VERSION_MINOR 2
+#define VERSION_REVISION 0
 
 #include <QtWidgets>
 #include <QElapsedTimer>
@@ -244,9 +244,10 @@ void MainWindow::about()
                     "<p><b>T Download Manager</b> is an internet download manager "
                     "that sends all its traffic "
                     "through the TOR network. </p>"
-                    "<p>Copyright (C) 2026 <a href='https://exceptica.com/'>Exceptica Software</a></p>")
+                    "<p>Copyright (C) 2026 Exceptica</p>")
                     .arg(VERSION_MAJOR).arg(VERSION_MINOR).arg(VERSION_REVISION);
     text->setText(aboutText);
+    text->setOpenExternalLinks( false );
 
     QPushButton *quitButton = new QPushButton("OK");
 
