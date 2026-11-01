@@ -15,10 +15,16 @@ MainWindow::MainWindow(QWidget *parent)
      * QNetworkProxy::Socks5Proxy.
      * Capabilities: TunnelingCapability, ListeningCapability, UdpTunnelingCapability, HostNameLookupCapability
      */
-    proxy.setType(QNetworkProxy::Socks5Proxy);
-    proxy.setHostName("127.0.0.1");
-    proxy.setPort(9150);
-    QNetworkProxy::setApplicationProxy(proxy);
+    proxy.setType( QNetworkProxy::Socks5Proxy );
+    proxy.setHostName( "127.0.0.1" );
+    proxy.setPort( 9150 );
+
+    /*
+     * QNetworkProxy::setApplicationProxy() establishes the process-wide default. Per Qt's documentation, any QAbstractSocket or QTcpSocket whose proxy type is DefaultProxy
+     * uses that application proxy, and QNetworkAccessManager falls back to it for requests where no per-manager proxy or factory is set. Our manager member was never given
+     * its own proxy, so it inherits the SOCKS5 setting from the constructor.
+     */
+    QNetworkProxy::setApplicationProxy( proxy );
 
     downloading = false;
 
@@ -97,11 +103,66 @@ MainWindow::MainWindow(QWidget *parent)
     QMetaObject::invokeMethod(this, "usingTORProxy", Qt::QueuedConnection);
 }
 
+/*
+ * Verify that traffic is really flowing through Tor by asking check.torproject.org, which reports whether the requester's IP
+ * belongs to the Tor network.
+ * See: https://check.torproject.org. Tor verification endpoint (undocumented, community-standard).
+ */
 bool MainWindow::usingTORProxy()
 {
-    if(proxy.type() != QNetworkProxy::Socks5Proxy || QNetworkProxy::applicationProxy().type() != QNetworkProxy::Socks5Proxy)
-    {
-        QMessageBox::warning(this, tr("Warning"), tr("You are not using the TOR network."));
+    /*
+     * The call to manager.get(...) exercises the exact code path downloads use (same QNetworkAccessManager, same proxy). It goes to 127.0.0.1:9150 and does not touch the clearnet.
+     * And critically, Qt does not try the proxy, fail, and then quietly connect directly, it surfaces the failure as an error. There's a whole family of dedicated proxy error
+     * codes, including QNetworkReply::ProxyConnectionRefusedError. With Tor down, our check gets ProxyConnectionRefusedError.
+     *
+     * No DNS leak either
+     * Two things protect us from a DNS leak here:
+     * 1. The proxy host is the literal 127.0.0.1, so no name resolution is needed to reach it. And ...
+     * 2. because SOCKS5 carries HostNameLookupCapability by default (see constructor of this class), Qt sends check.torproject.org to the proxy unresolved rather than resolving it locally,
+     * though in the failure case it never even gets that far, since the TCP connection to the proxy dies first. So a dead Tor produces zero packets and zero queries.
+     */
+    QNetworkReply *reply = manager.get( QNetworkRequest( QUrl( "https://check.torproject.org/api/ip" ) ) );
+
+    // Wait for the response using a local event loop so that existing callers can keep treating this function as synchronous.
+    QEventLoop loop;
+    connect( reply, &QNetworkReply::finished, &loop, &QEventLoop::quit );
+    // Give up after 10 seconds if Tor is unreachable.
+    QTimer timer;
+    timer.setSingleShot( true );
+    connect( &timer, &QTimer::timeout, &loop, &QEventLoop::quit );
+    timer.start( 10000 );
+
+    loop.exec();
+
+    bool isTor = false;
+
+    /*
+     * Log the error code since ProxyConnectionRefusedError (Tor not running), TimeoutError (Tor starting but no circuit yet),
+     * and a successful-but-not-Tor response are three different situations.
+     * TODO: that deserve three different messages alongside the QMessageBox::warning.
+     */
+    qDebug()<< reply->error();
+
+    if ( reply->error() == QNetworkReply::NoError ) {
+        // The API returns JSON like: {"IsTor":true,"IP":"x.x.x.x"}
+        QJsonParseError parseError;
+        QJsonDocument doc = QJsonDocument::fromJson( reply->readAll(), &parseError );
+
+        if ( parseError.error == QJsonParseError::NoError && doc.isObject() ){
+            qDebug()<< doc;
+            isTor = doc.object().value("IsTor").toBool();
+        }
+    }
+
+    reply->deleteLater();
+
+    if ( !isTor ) {
+        QMessageBox::warning(
+            this,
+            tr( "Warning" ),
+            tr( "You are not using the TOR network. "
+               "Please make sure Tor is running and connected, "
+               "then try again." ) );
         return false;
     }
 
