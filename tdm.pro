@@ -1,4 +1,8 @@
 QT += network widgets
+
+TARGET = tdm
+TEMPLATE = app
+
 requires(qtConfig(filedialog))
 
 HEADERS += src/addurldialog.h \
@@ -15,4 +19,8 @@ SOURCES += src/main.cpp \
 FORMS += forms/addurlform.ui
 RESOURCES += icons.qrc
 
-RC_FILE += tdm.rc
+
+# Windows resources only
+win32 {
+    RC_FILE += tdm.rc
+}

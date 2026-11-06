@@ -1,6 +1,6 @@
 #define VERSION_MAJOR 0
 #define VERSION_MINOR 2
-#define VERSION_REVISION 0
+#define VERSION_REVISION 1
 
 #include <QtWidgets>
 #include <QElapsedTimer>
@@ -302,9 +302,7 @@ void MainWindow::about()
     QLabel *text = new QLabel;
     text->setWordWrap(true);
     QString aboutText = QString("<h3>T Download Manager %1.%2.%3</h3>"
-                    "<p><b>T Download Manager</b> is an internet download manager "
-                    "that sends all its traffic "
-                    "through the TOR network. </p>"
+                    "<p><b>T Download Manager</b> routes all of its traffic over the Tor network, anonymizing every file transfer.</p>"
                     "<p>Copyright (C) 2026 Exceptica</p>")
                     .arg(VERSION_MAJOR).arg(VERSION_MINOR).arg(VERSION_REVISION);
     text->setText(aboutText);
