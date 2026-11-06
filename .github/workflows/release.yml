@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -70,13 +70,27 @@ jobs:
             --plugin qt \
             --output appimage
 
-          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
 
-          mv tdm-x86_64.AppImage \
-             "tdm-${VERSION}-x86_64.AppImage"
+          APPIMAGE=$(find . -maxdepth 1 -type f -name '*.AppImage' \
+            ! -name 'linuxdeploy-x86_64.AppImage' \
+            ! -name 'linuxdeploy-plugin-qt-x86_64.AppImage' \
+            -print -quit)
+
+          if [[ -z "$APPIMAGE" ]]; then
+            echo "AppImage not found. Current directory contents:"
+            ls -lah
+            exit 1
+          fi
+
+          mv "$APPIMAGE" "tdm-${VERSION}-x86_64.AppImage"
 
       - name: Upload Linux artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-release
           path: tdm-*-x86_64.AppImage
@@ -87,11 +101,11 @@ jobs:
   # ======================================
 
   build-windows:
-    name: Windows ZIP
+    name: Windows ZIP (MinGW)
     runs-on: windows-2022
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -99,13 +113,44 @@ jobs:
           version: '6.8.3'
           host: windows
           target: desktop
-          arch: win64_msvc2022_64
+          arch: win64_mingw
+          tools: 'tools_mingw1310'
+          
+      - name: Configure MinGW
+        shell: pwsh
+        run: |
+          Write-Host "Qt tools directory: $env:IQTA_TOOLS"
 
-      - name: Configure MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+          # Find the MinGW 13.1 compiler installed by install-qt-action
+          $compiler = Get-ChildItem -Path $env:IQTA_TOOLS -Filter g++.exe -Recurse |
+            Where-Object { $_.FullName -match 'mingw1310' } |
+            Select-Object -First 1
 
+          if (-not $compiler) {
+            Write-Host "Available g++ compilers:"
+            Get-ChildItem -Path $env:IQTA_TOOLS -Filter g++.exe -Recurse |
+              Select-Object -ExpandProperty FullName
+
+            throw "MinGW 13.1 compiler was not found. Check the Qt tools installation."
+          }
+          
+          $mingwBin = $compiler.Directory.FullName
+          
+          # Put the matching compiler first in PATH for this and later steps
+          $env:PATH = "$mingwBin;$env:PATH"
+          $mingwBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+          Write-Host "Using compiler: $($compiler.FullName)"
+          & $compiler.FullName --version
+          
+          Write-Host "Using make:"
+          Get-Command mingw32-make
+
+      - name: Clean build directory
+        shell: pwsh
+        run: |
+          Remove-Item build -Recurse -Force -ErrorAction SilentlyContinue
+          
       - name: Build
         shell: pwsh
         run: |
@@ -113,18 +158,25 @@ jobs:
           cd build
 
           qmake ../tdm.pro "CONFIG+=release"
-          nmake
+          mingw32-make -j2
 
       - name: Deploy Qt
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force deploy
 
-          Copy-Item build/tdm.exe deploy/
+          $exe = Get-ChildItem -Path build -Filter tdm.exe -Recurse |
+                 Select-Object -First 1
+
+          if (-not $exe) {
+              Get-ChildItem -Path build -Recurse
+              throw "tdm.exe was not generated."
+          }
+
+          Copy-Item $exe.FullName deploy/tdm.exe
 
           windeployqt `
             --release `
-            --compiler-runtime `
             --dir deploy `
             deploy/tdm.exe
 
@@ -132,6 +184,10 @@ jobs:
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME -replace '^v', ''
+
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+              $version = "${{ inputs.version }}"
+          }
 
           Compress-Archive `
             -Path deploy/* `
@@ -153,7 +209,7 @@ jobs:
     runs-on: macos-15-intel
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -181,7 +237,7 @@ jobs:
              "tdm-${VERSION}-macos.dmg"
 
       - name: Upload macOS artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-release
           path: tdm-*-macos.dmg
@@ -204,7 +260,7 @@ jobs:
 
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-assets
           merge-multiple: true
