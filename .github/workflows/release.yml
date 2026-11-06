@@ -1,0 +1,226 @@
+
+name: Build and Release TDM
+
+on:
+  push:
+    tags:
+      - 'v*'
+      
+   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+
+  # ======================================
+  # LINUX
+  # ======================================
+
+  build-linux:
+    name: Linux AppImage
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+
+      - name: Build
+        run: |
+          mkdir build
+          cd build
+          qmake ../tdm.pro CONFIG+=release
+          make -j2
+
+      - name: Prepare AppDir
+        run: |
+          mkdir -p AppDir/usr/bin
+          cp build/tdm AppDir/usr/bin/
+
+      - name: Download linuxdeploy
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+
+          chmod +x linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-plugin-qt-x86_64.AppImage
+
+      - name: Package AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          QMAKE="$(command -v qmake)" \
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --executable AppDir/usr/bin/tdm \
+            --desktop-file resources/tdm.desktop \
+            --icon-file resources/tdm.png \
+            --plugin qt \
+            --output appimage
+
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          mv tdm-x86_64.AppImage \
+             "tdm-${VERSION}-x86_64.AppImage"
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release
+          path: tdm-*-x86_64.AppImage
+          if-no-files-found: error
+
+  # ======================================
+  # WINDOWS
+  # ======================================
+
+  build-windows:
+    name: Windows ZIP
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+
+      - name: Configure MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build
+          cd build
+
+          qmake ../tdm.pro "CONFIG+=release"
+          nmake
+
+      - name: Deploy Qt
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force deploy
+
+          Copy-Item build/tdm.exe deploy/
+
+          windeployqt `
+            --release `
+            --compiler-runtime `
+            --dir deploy `
+            deploy/tdm.exe
+
+      - name: Create ZIP
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+
+          Compress-Archive `
+            -Path deploy/* `
+            -DestinationPath "tdm-$version-Windows-x64.zip"
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: tdm-*-Windows-x64.zip
+          if-no-files-found: error
+
+  # ======================================
+  # MACOS INTEL
+  # ======================================
+
+  build-macos:
+    name: macOS DMG
+    runs-on: macos-15-intel
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: mac
+          target: desktop
+          arch: clang_64
+
+      - name: Build
+        run: |
+          mkdir build
+          cd build
+
+          qmake ../tdm.pro CONFIG+=release
+          make -j2
+
+      - name: Deploy and create DMG
+        run: |
+          macdeployqt build/tdm.app -dmg
+
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          mv build/tdm.dmg \
+             "tdm-${VERSION}-macos.dmg"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: tdm-*-macos.dmg
+          if-no-files-found: error
+
+  # ======================================
+  # GITHUB RELEASE
+  # ======================================
+
+  publish-release:
+    if: false
+    name: Publish Release
+
+    runs-on: ubuntu-22.04
+
+    needs:
+      - build-linux
+      - build-windows
+      - build-macos
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify assets
+        run: |
+          ls -lh release-assets/
+          test "$(find release-assets -type f | wc -l)" -eq 3
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: TDM ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release-assets/*
+          fail_on_unmatched_files: true
+

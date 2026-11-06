@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=T Download Manager
+Comment=T Download Manager routes all of its traffic over the Tor network, anonymizing every file transfer.
+Exec=tdm
+Icon=tdm
+Categories=Utility;
+Terminal=false
